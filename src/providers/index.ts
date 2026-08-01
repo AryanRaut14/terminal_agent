@@ -1,7 +1,13 @@
 import { createAnthropicProvider } from "./anthropic.js";
 import type { Provider, ProviderName } from "./types.js";
 
-export type { Message, Provider, ProviderRequest, ProviderResponse } from "./types.js";
+export type {
+  ContentBlock,
+  Message,
+  Provider,
+  ProviderRequest,
+  ProviderResponse,
+} from "./types.js";
 
 const PROVIDERS: ProviderName[] = ["anthropic", "openai", "groq", "gemini"];
 

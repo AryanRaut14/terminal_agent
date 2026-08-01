@@ -1,7 +1,13 @@
+/** A block within a multi-part message (text, tool use, or tool result). */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; toolUseId: string; content: string; isError?: boolean };
+
 /** Provider-agnostic message in conversation history. */
 export interface Message {
   role: "user" | "assistant";
-  content: string;
+  content: string | ContentBlock[];
 }
 
 /** JSON-schema-style tool definition sent to the model. */
@@ -16,13 +22,6 @@ export interface ToolCall {
   id: string;
   name: string;
   input: Record<string, unknown>;
-}
-
-/** Result of executing a tool, sent back to the model. */
-export interface ToolResult {
-  toolCallId: string;
-  content: string;
-  isError?: boolean;
 }
 
 export interface ProviderRequest {

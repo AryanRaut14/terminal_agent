@@ -4,8 +4,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
 import "dotenv/config";
-import { createProvider, type Message } from "./providers/index.js";
-import { SYSTEM_PROMPT } from "./system-prompt.js";
+import { runAgentLoop } from "./agent-loop.js";
+import type { Message } from "./providers/index.js";
 
 const program = new Command();
 
@@ -38,33 +38,25 @@ interface CliOptions {
   resume?: string;
 }
 
-async function chat(
-  userMessage: string,
-  history: Message[],
-  opts: CliOptions
-): Promise<{ reply: string; history: Message[] }> {
-  const provider = createProvider(opts.provider);
-  const messages: Message[] = [
-    ...history,
-    { role: "user", content: userMessage },
-  ];
-
-  const response = await provider.sendMessage({
-    systemPrompt: SYSTEM_PROMPT,
-    messages,
+function loopOptions(opts: CliOptions) {
+  return {
+    provider: opts.provider,
     model: opts.model,
-  });
-
-  const updated: Message[] = [
-    ...messages,
-    { role: "assistant", content: response.text },
-  ];
-
-  return { reply: response.text, history: updated };
+    confirm: opts.confirm,
+    verbose: opts.verbose,
+    onToolCall: (name: string, toolInput: Record<string, unknown>) => {
+      console.error(`\n→ ${name}(${JSON.stringify(toolInput)})\n`);
+    },
+    onToolResult: (name: string, content: string) => {
+      const preview =
+        content.length > 500 ? content.slice(0, 500) + "\n...(truncated)" : content;
+      console.error(`← ${name}:\n${preview}\n`);
+    },
+  };
 }
 
 async function runSingleTask(task: string, opts: CliOptions): Promise<void> {
-  const { reply } = await chat(task, [], opts);
+  const { reply } = await runAgentLoop(task, [], loopOptions(opts));
   console.log(reply);
 }
 
@@ -87,7 +79,11 @@ async function runRepl(opts: CliOptions): Promise<void> {
       }
 
       try {
-        const { reply, history: updated } = await chat(trimmed, history, opts);
+        const { reply, history: updated } = await runAgentLoop(
+          trimmed,
+          history,
+          loopOptions(opts)
+        );
         history = updated;
         console.log(`\n${reply}\n`);
       } catch (err) {

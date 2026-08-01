@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+  ContentBlock,
+  Message,
   Provider,
   ProviderRequest,
   ProviderResponse,
@@ -19,6 +21,42 @@ function toAnthropicTools(tools: ToolDefinition[] | undefined) {
       ...t.inputSchema,
     },
   }));
+}
+
+function toAnthropicContent(
+  blocks: ContentBlock[]
+): Anthropic.MessageParam["content"] {
+  return blocks.map((block) => {
+    if (block.type === "text") {
+      return { type: "text" as const, text: block.text };
+    }
+    if (block.type === "tool_use") {
+      return {
+        type: "tool_use" as const,
+        id: block.id,
+        name: block.name,
+        input: block.input,
+      };
+    }
+    if (block.type === "tool_result") {
+      return {
+        type: "tool_result" as const,
+        tool_use_id: block.toolUseId,
+        content: block.content,
+        is_error: block.isError,
+      };
+    }
+    throw new Error(`Unsupported content block type`);
+  });
+}
+
+function toAnthropicMessages(messages: Message[]): Anthropic.MessageParam[] {
+  return messages.map((m) => {
+    if (typeof m.content === "string") {
+      return { role: m.role, content: m.content };
+    }
+    return { role: m.role, content: toAnthropicContent(m.content) };
+  });
 }
 
 function extractToolCalls(
@@ -60,10 +98,7 @@ export function createAnthropicProvider(apiKey?: string): Provider {
         model: request.model ?? DEFAULT_MODEL,
         max_tokens: 8192,
         system: request.systemPrompt,
-        messages: request.messages.map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
+        messages: toAnthropicMessages(request.messages),
         tools: toAnthropicTools(request.tools),
       });
 
