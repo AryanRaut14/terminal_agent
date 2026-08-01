@@ -5,6 +5,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
 import "dotenv/config";
 import { runAgentLoop } from "./agent-loop.js";
+import { loadAllTools } from "./extensions.js";
 import type { Message } from "./providers/index.js";
 import {
   appendTurn,
@@ -16,6 +17,7 @@ import {
   saveSession,
   type Session,
 } from "./session.js";
+import { coreTools, type Tool } from "./tools/index.js";
 
 const program = new Command();
 
@@ -33,10 +35,21 @@ program
   .option("--verbose", "Show raw tool calls")
   .option("--resume <session-id>", "Resume an existing session")
   .action(async (task: string | undefined, opts) => {
+    const { tools, warnings } = await loadAllTools(process.cwd(), coreTools);
+    for (const warning of warnings) {
+      console.error(`Warning: ${warning}`);
+    }
+    if (tools.length > coreTools.length) {
+      const names = tools
+        .filter((t) => !coreTools.some((c) => c.name === t.name))
+        .map((t) => t.name);
+      console.error(`Loaded extension tools: ${names.join(", ")}\n`);
+    }
+
     if (task) {
-      await runSingleTask(task, opts);
+      await runSingleTask(task, opts, tools);
     } else {
-      await runRepl(opts);
+      await runRepl(opts, tools);
     }
   });
 
@@ -48,12 +61,13 @@ interface CliOptions {
   resume?: string;
 }
 
-function loopOptions(opts: CliOptions) {
+function loopOptions(opts: CliOptions, tools: Tool[]) {
   return {
     provider: opts.provider,
     model: opts.model,
     confirm: opts.confirm,
     verbose: opts.verbose,
+    tools,
     onToolCall: (name: string, toolInput: Record<string, unknown>) => {
       console.error(`\n→ ${name}(${JSON.stringify(toolInput)})\n`);
     },
@@ -89,13 +103,14 @@ function turnDelta(before: Message[], after: Message[]): Message[] {
 async function runTurn(
   userMessage: string,
   session: Session,
-  opts: CliOptions
+  opts: CliOptions,
+  tools: Tool[]
 ): Promise<{ reply: string; session: Session }> {
   const history = getBranchHistory(session);
   const { reply, history: updated } = await runAgentLoop(
     userMessage,
     history,
-    loopOptions(opts)
+    loopOptions(opts, tools)
   );
   const delta = turnDelta(history, updated);
   appendTurn(session, delta);
@@ -103,15 +118,19 @@ async function runTurn(
   return { reply, session };
 }
 
-async function runSingleTask(task: string, opts: CliOptions): Promise<void> {
+async function runSingleTask(
+  task: string,
+  opts: CliOptions,
+  tools: Tool[]
+): Promise<void> {
   if (opts.resume) {
     const session = await initSession(opts);
-    const { reply } = await runTurn(task, session, opts);
+    const { reply } = await runTurn(task, session, opts, tools);
     console.log(reply);
     return;
   }
 
-  const { reply } = await runAgentLoop(task, [], loopOptions(opts));
+  const { reply } = await runAgentLoop(task, [], loopOptions(opts, tools));
   console.log(reply);
 }
 
@@ -163,7 +182,7 @@ function handleReplCommand(line: string, session: Session): string | null {
   return trimmed;
 }
 
-async function runRepl(opts: CliOptions): Promise<void> {
+async function runRepl(opts: CliOptions, tools: Tool[]): Promise<void> {
   const rl = createInterface({ input, output });
   let session = await initSession(opts);
 
@@ -190,7 +209,7 @@ async function runRepl(opts: CliOptions): Promise<void> {
       }
 
       try {
-        const result = await runTurn(trimmed, session, opts);
+        const result = await runTurn(trimmed, session, opts, tools);
         session = result.session;
         console.log(`\n${result.reply}\n`);
       } catch (err) {
