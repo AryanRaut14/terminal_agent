@@ -4,6 +4,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
 import "dotenv/config";
+import { createProvider, type Message } from "./providers/index.js";
+import { SYSTEM_PROMPT } from "./system-prompt.js";
 
 const program = new Command();
 
@@ -36,12 +38,40 @@ interface CliOptions {
   resume?: string;
 }
 
-async function runSingleTask(task: string, _opts: CliOptions): Promise<void> {
-  console.log(`[echo] ${task}`);
+async function chat(
+  userMessage: string,
+  history: Message[],
+  opts: CliOptions
+): Promise<{ reply: string; history: Message[] }> {
+  const provider = createProvider(opts.provider);
+  const messages: Message[] = [
+    ...history,
+    { role: "user", content: userMessage },
+  ];
+
+  const response = await provider.sendMessage({
+    systemPrompt: SYSTEM_PROMPT,
+    messages,
+    model: opts.model,
+  });
+
+  const updated: Message[] = [
+    ...messages,
+    { role: "assistant", content: response.text },
+  ];
+
+  return { reply: response.text, history: updated };
 }
 
-async function runRepl(_opts: CliOptions): Promise<void> {
+async function runSingleTask(task: string, opts: CliOptions): Promise<void> {
+  const { reply } = await chat(task, [], opts);
+  console.log(reply);
+}
+
+async function runRepl(opts: CliOptions): Promise<void> {
   const rl = createInterface({ input, output });
+  let history: Message[] = [];
+
   console.log("pi-clone — interactive mode (type 'exit' or Ctrl+C to quit)\n");
 
   try {
@@ -56,7 +86,14 @@ async function runRepl(_opts: CliOptions): Promise<void> {
         continue;
       }
 
-      console.log(`[echo] ${trimmed}`);
+      try {
+        const { reply, history: updated } = await chat(trimmed, history, opts);
+        history = updated;
+        console.log(`\n${reply}\n`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`\nError: ${msg}\n`);
+      }
     }
   } finally {
     rl.close();
