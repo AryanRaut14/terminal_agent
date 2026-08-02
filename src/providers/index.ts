@@ -1,4 +1,7 @@
 import { createAnthropicProvider } from "./anthropic.js";
+import { createGeminiProvider } from "./gemini.js";
+import { createGroqProvider } from "./groq.js";
+import { createOpenAIProvider } from "./openai.js";
 import type { Provider, ProviderName } from "./types.js";
 
 export type {
@@ -24,10 +27,10 @@ export function createProvider(name: string): Provider {
     case "anthropic":
       return createAnthropicProvider();
     case "openai":
+      return createOpenAIProvider();
     case "groq":
+      return createGroqProvider();
     case "gemini":
-      throw new Error(
-        `Provider "${normalized}" is not implemented yet. Use --provider anthropic for now.`
-      );
+      return createGeminiProvider();
   }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { mkdir, access, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
@@ -7,6 +8,7 @@ import "dotenv/config";
 import { runAgentLoop } from "./agent-loop.js";
 import { loadAllTools } from "./extensions.js";
 import type { Message } from "./providers/index.js";
+import { loadSkills } from "./skills.js";
 import {
   appendTurn,
   branchTo,
@@ -36,6 +38,7 @@ program
   .option("--resume <session-id>", "Resume an existing session")
   .action(async (task: string | undefined, opts) => {
     const { tools, warnings } = await loadAllTools(process.cwd(), coreTools);
+    const skills = await loadSkills(process.cwd());
     for (const warning of warnings) {
       console.error(`Warning: ${warning}`);
     }
@@ -46,10 +49,12 @@ program
       console.error(`Loaded extension tools: ${names.join(", ")}\n`);
     }
 
+    await maybeShowPermissionWarning();
+
     if (task) {
-      await runSingleTask(task, opts, tools);
+      await runSingleTask(task, opts, tools, skills);
     } else {
-      await runRepl(opts, tools);
+      await runRepl(opts, tools, skills);
     }
   });
 
@@ -61,20 +66,62 @@ interface CliOptions {
   resume?: string;
 }
 
-function loopOptions(opts: CliOptions, tools: Tool[]) {
+function colorize(text: string, color: string): string {
+  if (!process.stdout.isTTY) return text;
+  return `${color}${text}\x1b[0m`;
+}
+
+function printUser(text: string): void {
+  console.log(colorize(`You: ${text}`, "\x1b[36m"));
+}
+
+function printAgent(text: string): void {
+  console.log(colorize(`Agent: ${text}`, "\x1b[32m"));
+}
+
+function printToolCall(name: string, toolInput: Record<string, unknown>): void {
+  console.error(colorize(`→ ${name}(${JSON.stringify(toolInput)})`, "\x1b[33m"));
+}
+
+function printToolResult(name: string, content: string): void {
+  const preview =
+    content.length > 500 ? content.slice(0, 500) + "\n...(truncated)" : content;
+  console.error(colorize(`← ${name}:\n${preview}`, "\x1b[34m"));
+}
+
+async function maybeShowPermissionWarning(): Promise<void> {
+  const warningPath = process.cwd() + "/.pi-clone/.permission-warning-shown";
+  try {
+    await access(warningPath);
+    return;
+  } catch {
+    // continue
+  }
+
+  console.error(
+    colorize(
+      "Warning: this agent can read, write, and execute commands with your full user permissions. Consider running it in a container or VM for untrusted tasks.",
+      "\x1b[31m"
+    )
+  );
+
+  await mkdir(process.cwd() + "/.pi-clone", { recursive: true });
+  await writeFile(warningPath, "seen", "utf-8");
+}
+
+function loopOptions(opts: CliOptions, tools: Tool[], skills?: unknown[]) {
   return {
     provider: opts.provider,
     model: opts.model,
     confirm: opts.confirm,
     verbose: opts.verbose,
     tools,
+    skills,
     onToolCall: (name: string, toolInput: Record<string, unknown>) => {
-      console.error(`\n→ ${name}(${JSON.stringify(toolInput)})\n`);
+      printToolCall(name, toolInput);
     },
     onToolResult: (name: string, content: string) => {
-      const preview =
-        content.length > 500 ? content.slice(0, 500) + "\n...(truncated)" : content;
-      console.error(`← ${name}:\n${preview}\n`);
+      printToolResult(name, content);
     },
   };
 }
@@ -104,13 +151,14 @@ async function runTurn(
   userMessage: string,
   session: Session,
   opts: CliOptions,
-  tools: Tool[]
+  tools: Tool[],
+  skills?: unknown[]
 ): Promise<{ reply: string; session: Session }> {
   const history = getBranchHistory(session);
   const { reply, history: updated } = await runAgentLoop(
     userMessage,
     history,
-    loopOptions(opts, tools)
+    loopOptions(opts, tools, skills)
   );
   const delta = turnDelta(history, updated);
   appendTurn(session, delta);
@@ -121,16 +169,17 @@ async function runTurn(
 async function runSingleTask(
   task: string,
   opts: CliOptions,
-  tools: Tool[]
+  tools: Tool[],
+  skills?: unknown[]
 ): Promise<void> {
   if (opts.resume) {
     const session = await initSession(opts);
-    const { reply } = await runTurn(task, session, opts, tools);
+    const { reply } = await runTurn(task, session, opts, tools, skills);
     console.log(reply);
     return;
   }
 
-  const { reply } = await runAgentLoop(task, [], loopOptions(opts, tools));
+  const { reply } = await runAgentLoop(task, [], loopOptions(opts, tools, skills));
   console.log(reply);
 }
 
@@ -182,7 +231,7 @@ function handleReplCommand(line: string, session: Session): string | null {
   return trimmed;
 }
 
-async function runRepl(opts: CliOptions, tools: Tool[]): Promise<void> {
+async function runRepl(opts: CliOptions, tools: Tool[], skills?: unknown[]): Promise<void> {
   const rl = createInterface({ input, output });
   let session = await initSession(opts);
 
@@ -190,7 +239,7 @@ async function runRepl(opts: CliOptions, tools: Tool[]): Promise<void> {
 
   try {
     while (true) {
-      const line = await rl.question("> ");
+      const line = await rl.question(colorize("> ", "\x1b[36m"));
       const trimmed = line.trim();
 
       if (trimmed === "exit" || trimmed === "quit") {
@@ -208,10 +257,12 @@ async function runRepl(opts: CliOptions, tools: Tool[]): Promise<void> {
         continue;
       }
 
+      printUser(trimmed);
+
       try {
-        const result = await runTurn(trimmed, session, opts, tools);
+        const result = await runTurn(trimmed, session, opts, tools, skills);
         session = result.session;
-        console.log(`\n${result.reply}\n`);
+        printAgent(result.reply);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`\nError: ${msg}\n`);

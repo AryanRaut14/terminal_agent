@@ -1,5 +1,6 @@
 import { createProvider, type ContentBlock, type Message, type Provider } from "./providers/index.js";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
+import { type SkillSummary } from "./skills.js";
 import {
   coreTools,
   executeToolCall,
@@ -16,6 +17,7 @@ export interface AgentLoopOptions {
   confirm?: boolean;
   verbose?: boolean;
   tools?: Tool[];
+  skills?: SkillSummary[];
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
   onToolResult?: (name: string, content: string, isError?: boolean) => void;
 }
@@ -53,10 +55,17 @@ export async function runAgentLoop(
   const cwd = options.cwd ?? process.cwd();
   const ctx = { cwd, confirm: options.confirm };
 
-  let messages: Message[] = [
-    ...history,
-    { role: "user", content: userMessage },
-  ];
+  const skillContext = options.skills?.length
+    ? `Available skills (read them with the read tool if useful):\n${options.skills
+        .map((skill) => `- ${skill.name}: ${skill.description}`)
+        .join("\n")}`
+    : undefined;
+
+  let messages: Message[] = [...history];
+  if (skillContext) {
+    messages.push({ role: "user", content: skillContext });
+  }
+  messages.push({ role: "user", content: userMessage });
 
   let reply = "";
   let iterations = 0;
